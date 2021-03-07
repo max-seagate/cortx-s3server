@@ -51,387 +51,432 @@ import com.seagates3.authencryptutil.RSAEncryptDecryptUtil;
  */
 public class AuthServerConfig {
 
-    public static String authResourceDir;
-    private static String samlMetadataFilePath;
-    private static Properties authServerConfig;
-    private static String ldapPasswd;
-    public
-     static final String DEFAULT_ACL_XML = "/defaultAclTemplate.xml";
-    public
-     static final String XSD_PATH = "/AmazonS3.xsd";
-    public
-     static final int MAX_GRANT_SIZE = 100;
-    private static Logger logger;
+  public
+   static String authResourceDir;
+  private
+   static String samlMetadataFilePath;
+  private
+   static Properties authServerConfig;
+  private
+   static String ldapPasswd;
+  public
+   static final String DEFAULT_ACL_XML = "/defaultAclTemplate.xml";
+  public
+   static final String XSD_PATH = "/AmazonS3.xsd";
+  public
+   static final int MAX_GRANT_SIZE = 100;
+  private
+   static Logger logger;
 
-    /**
-     * Read the properties file.
-     * @throws GeneralSecurityException
-     */
-    public
-     static void readConfig(String resourceDir, String authServerFile,
-                            String keyStoreFile) throws FileNotFoundException,
-         IOException, GeneralSecurityException, Exception {
-        authResourceDir = resourceDir;
-        Path authProperties = Paths.get(authResourceDir, authServerFile);
-        Path authSecureProperties = Paths.get(authResourceDir, keyStoreFile);
-        Properties authServerConfig = new Properties();
-        InputStream input = new FileInputStream(authProperties.toString());
-        authServerConfig.load(input);
-        Properties authSecureConfig = new Properties();
-        InputStream inSecure = new FileInputStream(authSecureProperties.toString());
-        authSecureConfig.load(inSecure);
-        authServerConfig.putAll(authSecureConfig);
-        AuthServerConfig.init(authServerConfig);
-        if (input != null) input.close();
-        if (inSecure != null) inSecure.close();
-    }
+   /**
+    * Read the properties file.
+    *
+    * @throws GeneralSecurityException
+    */
+  public
+   static void readConfig(String resourceDir, String authServerFile,
+                          String keyStoreFile) throws FileNotFoundException,
+       IOException, GeneralSecurityException, Exception {
+     authResourceDir = resourceDir;
+     Path authProperties = Paths.get(authResourceDir, authServerFile);
+     Path authSecureProperties = Paths.get(authResourceDir, keyStoreFile);
+     Properties authServerConfig = new Properties();
+     InputStream input = new FileInputStream(authProperties.toString());
+     authServerConfig.load(input);
+     Properties authSecureConfig = new Properties();
+     InputStream inSecure =
+         new FileInputStream(authSecureProperties.toString());
+     authSecureConfig.load(inSecure);
+     authServerConfig.putAll(authSecureConfig);
+     AuthServerConfig.init(authServerConfig);
+     if (input != null) input.close();
+     if (inSecure != null) inSecure.close();
+   }
 
-    /**
-     * Initialize default endpoint and s3 endpoints etc.
-     *
-     * @param authServerConfig Server configuration parameters.
-     * @throws Exception
-     */
-    public static void init(Properties authServerConfig) throws Exception {
-        AuthServerConfig.authServerConfig = authServerConfig;
+   /**
+    * Initialize default endpoint and s3 endpoints etc.
+    *
+    * @param authServerConfig Server configuration parameters.
+    * @throws Exception
+    */
+  public
+   static void init(Properties authServerConfig) throws Exception {
+     AuthServerConfig.authServerConfig = authServerConfig;
 
-        setSamlMetadataFile(authServerConfig.getProperty(
-                "samlMetadataFileName"));
-        String jvm = ManagementFactory.getRuntimeMXBean().getName();
-        AuthServerConfig.authServerConfig.put("pid", jvm.substring(0, jvm.indexOf("@")));
+     setSamlMetadataFile(authServerConfig.getProperty("samlMetadataFileName"));
+     String jvm = ManagementFactory.getRuntimeMXBean().getName();
+     AuthServerConfig.authServerConfig.put("pid",
+                                           jvm.substring(0, jvm.indexOf("@")));
+   }
 
-    }
+   /**
+    * Log default configurations for auth-server
+    *
+    * @param authServerConfig Server configuration parameters.
+    * @param enuKeys          ServerConfig keys.
+    */
+  public
+   static void logConfigProps() {
+     Properties authServerConfig = AuthServerConfig.authServerConfig;
+     Enumeration<Object> authProps = authServerConfig.keys();
 
-    /**
-     * Log default configurations for auth-server
-     *
-     * @param authServerConfig Server configuration parameters.
-     * @param enuKeys ServerConfig keys.
-     */
-   public static void logConfigProps() {
-       Properties authServerConfig = AuthServerConfig.authServerConfig;
-       Enumeration<Object> authProps = authServerConfig.keys();
+     logger = LoggerFactory.getLogger(AuthServerConfig.class.getName());
 
-       logger = LoggerFactory.getLogger(AuthServerConfig.class.getName());
-
-       logger.info("Configuring AuthServer with following properties");
-       while (authProps.hasMoreElements()) {
-                String key = (String) authProps.nextElement();
-                Set<String> secureProps = new HashSet<>(Arrays.asList(
-                    "s3KeyPassword", "ldapLoginPW", "s3KeyStorePassword"));
-                if( !secureProps.contains(key) ) {
-                     String value = authServerConfig.getProperty(key);
-                     logger.info("Config [" + key + "] = " + value);
-                }
+     logger.info("Configuring AuthServer with following properties");
+     while (authProps.hasMoreElements()) {
+       String key = (String)authProps.nextElement();
+       Set<String> secureProps = new HashSet<>(
+           Arrays.asList("s3KeyPassword", "ldapLoginPW", "s3KeyStorePassword"));
+       if (!secureProps.contains(key)) {
+         String value = authServerConfig.getProperty(key);
+         logger.info("Config [" + key + "] = " + value);
        }
-    }
+     }
+   }
 
-    /**
-     * Initialize Openldap-Password.
-     * 1. fetch ldap cipher key from s3cipher
-     * 2. decrypt ldap password using s3cipher
-     * @param authServerConfig Server configuration parameters.
-     * @throws GeneralSecurityException
-     */
-    public static void loadCredentials() throws GeneralSecurityException, Exception {
-       logger = LoggerFactory.getLogger(AuthServerConfig.class.getName());
-       logger.debug("Loading Openldap credentials");
-       String ldapCipherKey = null;
+   /**
+    * Initialize Openldap-Password. 1. fetch ldap cipher key from s3cipher 2.
+    * decrypt ldap password using s3cipher
+    *
+    * @param authServerConfig Server configuration parameters.
+    * @throws GeneralSecurityException
+    */
+  public
+   static void loadCredentials() throws GeneralSecurityException, Exception {
+     logger = LoggerFactory.getLogger(AuthServerConfig.class.getName());
+     logger.debug("Loading Openldap credentials");
+     String ldapCipherKey = null;
 
-       String encryptedPasswd = authServerConfig.getProperty("ldapLoginPW");
-       String ldap_const_key = authServerConfig.getProperty("ldap_const_key");
-       String ldapCipherCmd =
-           "s3cipher generate_key --const_key " + ldap_const_key;
-       BufferedReader reader1 = null;
-       BufferedReader reader2 = null;
-       try {
-         // 1. Generate openldap cipher key
-         Process s3Cipher = Runtime.getRuntime().exec(ldapCipherCmd);
-         int exitVal = s3Cipher.waitFor();
-         if (exitVal != 0) {
-           logger.error(
-               "S3 Cipher util failed to generate openldap cipher key");
-           throw new IOException("S3 cipher util exited with error.");
-         }
-         reader1 = new BufferedReader(
-             new InputStreamReader(s3Cipher.getInputStream()));
-         String line = reader1.readLine();
-         if (line == null || line.isEmpty()) {
-           throw new IOException(
-               "S3 cipher returned empty stream while fetching openldap " +
-               "cipher " + "key.");
-         } else {
-           ldapCipherKey = line;
-         }
-         // 2. Decrypt openldap password using cipher Key.
-         String decryptCmd = "s3cipher decrypt --data " + encryptedPasswd +
-                             " --key " + ldapCipherKey;
-         Process s3CipherDecrypt = Runtime.getRuntime().exec(decryptCmd);
-
-         int exitCode = s3CipherDecrypt.waitFor();
-         if (exitCode != 0) {
-           logger.error("S3 Cipher util failed to decrypt openldap password");
-           throw new IOException("S3 cipher util exited with error.");
-         }
-         reader2 = new BufferedReader(
-             new InputStreamReader(s3CipherDecrypt.getInputStream()));
-         String output = reader2.readLine();
-         if (output == null || output.isEmpty()) {
-           throw new IOException(
-               "S3 cipher returned empty stream while decrypting openldap " +
-               "password.");
-         } else {
-           ldapPasswd = output;
-         }
+     String encryptedPasswd = authServerConfig.getProperty("ldapLoginPW");
+     String ldap_const_key = authServerConfig.getProperty("ldap_const_key");
+     String ldapCipherCmd =
+         "s3cipher generate_key --const_key " + ldap_const_key;
+     BufferedReader reader1 = null;
+     BufferedReader reader2 = null;
+     try {
+       // 1. Generate openldap cipher key
+       Process s3Cipher = Runtime.getRuntime().exec(ldapCipherCmd);
+       int exitVal = s3Cipher.waitFor();
+       if (exitVal != 0) {
+         logger.error("S3 Cipher util failed to generate openldap cipher key");
+         throw new IOException("S3 cipher util exited with error.");
        }
-       catch (Exception e) {
-         logger.error(
-             e.getMessage() +
-             " Error occured in S3 cipher while decrypting openldap password.");
-         System.exit(1);
+       reader1 =
+           new BufferedReader(new InputStreamReader(s3Cipher.getInputStream()));
+       String line = reader1.readLine();
+       if (line == null || line.isEmpty()) {
+         throw new IOException(
+             "S3 cipher returned empty stream while fetching openldap " +
+             "cipher " + "key.");
+       } else {
+         ldapCipherKey = line;
        }
-       finally {
-         if (reader1 != null) reader1.close();
-         if (reader2 != null) reader2.close();
+       // 2. Decrypt openldap password using cipher Key.
+       String decryptCmd = "s3cipher decrypt --data " + encryptedPasswd +
+                           " --key " + ldapCipherKey;
+       Process s3CipherDecrypt = Runtime.getRuntime().exec(decryptCmd);
+
+       int exitCode = s3CipherDecrypt.waitFor();
+       if (exitCode != 0) {
+         logger.error("S3 Cipher util failed to decrypt openldap password");
+         throw new IOException("S3 cipher util exited with error.");
        }
-    }
-
-    /**
-     * @return the process id
-     */
-    public static int getPid() {
-        return Integer.parseInt(authServerConfig.getProperty("pid"));
-    }
-
-    /**
-     * Return the end points of S3-Auth server.
-     *
-     * @return server endpoints.
-     */
-    public static String[] getEndpoints() {
-        return authServerConfig.getProperty("s3Endpoints").split(",");
-    }
-
-    /**
-     * Return the default end point of S3-Auth server.
-     *
-     * @return default endpoint.
-     */
-    public static String getDefaultEndpoint() {
-        return authServerConfig.getProperty("defaultEndpoint");
-    }
-
-    /**
-     * @return Path of SAML metadata file.
-     */
-    public static String getSAMLMetadataFilePath() {
-        return samlMetadataFilePath;
-    }
-
-    public
-     static String getKeyStoreName() {
-       return authServerConfig.getProperty("s3KeyStoreName");
+       reader2 = new BufferedReader(
+           new InputStreamReader(s3CipherDecrypt.getInputStream()));
+       String output = reader2.readLine();
+       if (output == null || output.isEmpty()) {
+         throw new IOException(
+             "S3 cipher returned empty stream while decrypting openldap " +
+             "password.");
+       } else {
+         ldapPasswd = output;
+       }
      }
-
-    public
-     static Path getKeyStorePath() {
-       return Paths.get(authServerConfig.getProperty("s3KeyStorePath"),
-                        getKeyStoreName());
+     catch (Exception e) {
+       logger.error(
+           e.getMessage() +
+           " Error occured in S3 cipher while decrypting openldap password.");
+       System.exit(1);
      }
-
-    public
-     static String getKeyStorePassword() {
-       return authServerConfig.getProperty("s3KeyStorePassword");
+     finally {
+       if (reader1 != null) reader1.close();
+       if (reader2 != null) reader2.close();
      }
+   }
 
-    public
-     static String getKeyPassword() {
-       return authServerConfig.getProperty("s3KeyPassword");
+   /**
+    * @return the process id
+    */
+  public
+   static int getPid() {
+     return Integer.parseInt(authServerConfig.getProperty("pid"));
+   }
+
+   /**
+    * Return the end points of S3-Auth server.
+    *
+    * @return server endpoints.
+    */
+  public
+   static String[] getEndpoints() {
+     return authServerConfig.getProperty("s3Endpoints").split(",");
+   }
+
+   /**
+    * Return the default end point of S3-Auth server.
+    *
+    * @return default endpoint.
+    */
+  public
+   static String getDefaultEndpoint() {
+     return authServerConfig.getProperty("defaultEndpoint");
+   }
+
+   /**
+    * @return Path of SAML metadata file.
+    */
+  public
+   static String getSAMLMetadataFilePath() { return samlMetadataFilePath; }
+
+  public
+   static String getKeyStoreName() {
+     return authServerConfig.getProperty("s3KeyStoreName");
+   }
+
+  public
+   static Path getKeyStorePath() {
+     return Paths.get(authServerConfig.getProperty("s3KeyStorePath"),
+                      getKeyStoreName());
+   }
+
+  public
+   static String getKeyStorePassword() {
+     return authServerConfig.getProperty("s3KeyStorePassword");
+   }
+
+  public
+   static String getKeyPassword() {
+     return authServerConfig.getProperty("s3KeyPassword");
+   }
+
+  public
+   static int getHttpPort() {
+     return Integer.parseInt(authServerConfig.getProperty("httpPort"));
+   }
+
+  public
+   static int getHttpsPort() {
+     return Integer.parseInt(authServerConfig.getProperty("httpsPort"));
+   }
+
+  public
+   static String getDefaultHost() {
+     return authServerConfig.getProperty("defaultHost");
+   }
+
+  public
+   static boolean isHttpEnabled() {
+     return Boolean.valueOf(authServerConfig.getProperty("enable_http"));
+   }
+
+  public
+   static boolean isHttpsEnabled() {
+     return Boolean.valueOf(authServerConfig.getProperty("enable_https"));
+   }
+
+  public
+   static String getDataSource() {
+     return authServerConfig.getProperty("dataSource");
+   }
+
+  public
+   static String getLdapHost() {
+     return authServerConfig.getProperty("ldapHost");
+   }
+
+  public
+   static int getLdapPort() {
+     return Integer.parseInt(authServerConfig.getProperty("ldapPort"));
+   }
+
+  public
+   static int getLdapSSLPort() {
+     return Integer.parseInt(authServerConfig.getProperty("ldapSSLPort"));
+   }
+
+  public
+   static Boolean isSSLToLdapEnabled() {
+     return Boolean.valueOf(authServerConfig.getProperty("enableSSLToLdap"));
+   }
+
+  public
+   static int getLdapMaxConnections() {
+     return Integer.parseInt(authServerConfig.getProperty("ldapMaxCons"));
+   }
+
+  public
+   static int getLdapMaxSharedConnections() {
+     return Integer.parseInt(authServerConfig.getProperty("ldapMaxSharedCons"));
+   }
+
+  public
+   static String getLdapLoginDN() {
+     return authServerConfig.getProperty("ldapLoginDN");
+   }
+
+  public
+   static String getLdapLoginCN() {
+     String ldapLoginDN = authServerConfig.getProperty("ldapLoginDN");
+     String ldapLoginCN = ldapLoginDN.substring(ldapLoginDN.indexOf("cn=") + 3,
+                                                ldapLoginDN.indexOf(','));
+     return ldapLoginCN;
+   }
+
+  public
+   static String getLdapLoginPassword() { return ldapPasswd; }
+
+  public
+   static String getCertAlias() {
+     return authServerConfig.getProperty("s3AuthCertAlias");
+   }
+
+  public
+   static String getConsoleURL() {
+     return authServerConfig.getProperty("consoleURL");
+   }
+
+  public
+   static String getLogConfigFile() {
+     return authServerConfig.getProperty("logConfigFile");
+   }
+
+  public
+   static String getLogLevel() {
+     return authServerConfig.getProperty("logLevel");
+   }
+
+  public
+   static int getBossGroupThreads() {
+     return Integer.parseInt(
+         authServerConfig.getProperty("nettyBossGroupThreads"));
+   }
+
+  public
+   static int getWorkerGroupThreads() {
+     return Integer.parseInt(
+         authServerConfig.getProperty("nettyWorkerGroupThreads"));
+   }
+
+  public
+   static boolean isPerfEnabled() {
+     return Boolean.valueOf(authServerConfig.getProperty("perfEnabled"));
+   }
+
+  public
+   static String getPerfLogFile() {
+     return authServerConfig.getProperty("perfLogFile");
+   }
+
+  public
+   static int getEventExecutorThreads() {
+     return Integer.parseInt(
+         authServerConfig.getProperty("nettyEventExecutorThreads"));
+   }
+
+  public
+   static int getLdapSearchResultsSizeLimit() {
+     return Integer.parseInt(
+         authServerConfig.getProperty("ldapSearchResultsSizeLimit"));
+   }
+
+  public
+   static boolean isFaultInjectionEnabled() {
+     return Boolean.valueOf(
+         authServerConfig.getProperty("enableFaultInjection"));
+   }
+
+   /**
+    * Set the SAML Metadata file Path.
+    *
+    * @param fileName Name of the metadata file.
+    */
+  private
+   static void setSamlMetadataFile(String fileName) {
+     Path filePath = Paths.get("", "resources", "static", fileName);
+     samlMetadataFilePath = filePath.toString();
+   }
+
+  public
+   static boolean isEnableHttpsToS3() {
+     return Boolean.valueOf(authServerConfig.getProperty("enableHttpsToS3"));
+   }
+
+   /**
+    * Set Request ID
+    */
+  public
+   static void setReqId(String reqId) { MDC.put("ReqId", reqId); }
+
+   /**
+    * Set Request ID
+    */
+  public
+   static void setStripedReqId(String reqId) { MDC.put("SReqId", reqId); }
+
+   /**
+    * Get Request ID
+    */
+  public
+   static String getReqId() {
+     String reqId = MDC.get("ReqId");
+     if (reqId == null) {
+       // Set to some dummy value for Unit tests where Req Id is not set
+       reqId = "0000";
      }
+     return reqId;
+   }
 
-    public static int getHttpPort() {
-        return Integer.parseInt(authServerConfig.getProperty("httpPort"));
-    }
+   /**
+    * Get Request ID
+    */
+  public
+   static String getStripedReqId() {
+     String sreqId = MDC.get("SReqId");
+     if (sreqId == null) {
+       // Set to some dummy value for Unit tests where Req Id is not set
+       sreqId = "0000";
+     }
+     return sreqId;
+   }
 
-    public static int getHttpsPort() {
-        return Integer.parseInt(authServerConfig.getProperty("httpsPort"));
-    }
+  public
+   static List<String> getS3InternalAccounts() {
+     List<String> internalAccountsList = new ArrayList<>();
+     String internalAccounts =
+         authServerConfig.getProperty("s3InternalAccounts");
+     if (internalAccounts != null) {
+       internalAccountsList = Arrays.asList(internalAccounts.split(","));
+     }
+     return internalAccountsList;
+   }
 
-    public static String getDefaultHost() {
-        return authServerConfig.getProperty("defaultHost");
-    }
+  public
+   int getVersion() {
+     return Integer.parseInt(authServerConfig.getProperty("version"));
+   }
 
-    public static boolean isHttpEnabled() {
-        return Boolean.valueOf(authServerConfig.getProperty("enable_http"));
-    }
+  public
+   static int getCacheTimeout() {
+     return Integer.parseInt(authServerConfig.getProperty("cacheTimeout"));
+   }
 
-    public static boolean isHttpsEnabled() {
-        return Boolean.valueOf(authServerConfig.getProperty("enable_https"));
-    }
+  public
+   static int getMaxAccountLimit() {
+     return Integer.parseInt(authServerConfig.getProperty("maxAccountLimit"));
+   }
 
-    public static String getDataSource() {
-        return authServerConfig.getProperty("dataSource");
-    }
-
-    public static String getLdapHost() {
-        return authServerConfig.getProperty("ldapHost");
-    }
-
-    public static int getLdapPort() {
-        return Integer.parseInt(authServerConfig.getProperty("ldapPort"));
-    }
-
-    public static int getLdapSSLPort() {
-        return Integer.parseInt(authServerConfig.getProperty("ldapSSLPort"));
-    }
-
-    public static Boolean isSSLToLdapEnabled() {
-        return Boolean.valueOf(authServerConfig.getProperty("enableSSLToLdap"));
-    }
-
-    public static int getLdapMaxConnections() {
-        return Integer.parseInt(authServerConfig.getProperty("ldapMaxCons"));
-    }
-
-    public static int getLdapMaxSharedConnections() {
-        return Integer.parseInt(authServerConfig.getProperty("ldapMaxSharedCons"));
-    }
-
-    public static String getLdapLoginDN() {
-        return authServerConfig.getProperty("ldapLoginDN");
-    }
-
-    public static String getLdapLoginCN() {
-        String ldapLoginDN = authServerConfig.getProperty("ldapLoginDN");
-        String ldapLoginCN = ldapLoginDN.substring(
-              ldapLoginDN.indexOf("cn=") + 3, ldapLoginDN.indexOf(','));
-        return ldapLoginCN;
-    }
-
-    public static String getLdapLoginPassword() {
-        return ldapPasswd;
-    }
-
-    public
-     static String getCertAlias() {
-       return authServerConfig.getProperty("s3AuthCertAlias");
-    }
-
-    public static String getConsoleURL() {
-        return authServerConfig.getProperty("consoleURL");
-    }
-
-    public static String getLogConfigFile() {
-        return authServerConfig.getProperty("logConfigFile");
-    }
-
-    public static String getLogLevel() {
-        return authServerConfig.getProperty("logLevel");
-    }
-
-    public static int getBossGroupThreads() {
-        return Integer.parseInt(
-                authServerConfig.getProperty("nettyBossGroupThreads"));
-    }
-
-    public static int getWorkerGroupThreads() {
-        return Integer.parseInt(
-                authServerConfig.getProperty("nettyWorkerGroupThreads"));
-    }
-
-    public static boolean isPerfEnabled() {
-        return Boolean.valueOf(authServerConfig.getProperty("perfEnabled"));
-    }
-
-    public static String getPerfLogFile() {
-        return authServerConfig.getProperty("perfLogFile");
-    }
-
-    public static int getEventExecutorThreads() {
-        return Integer.parseInt(
-                authServerConfig.getProperty("nettyEventExecutorThreads"));
-    }
-
-   public
-    static int getLdapSearchResultsSizeLimit() {
-      return Integer.parseInt(
-          authServerConfig.getProperty("ldapSearchResultsSizeLimit"));
-    }
-
-    public static boolean isFaultInjectionEnabled() {
-        return Boolean.valueOf(authServerConfig.getProperty("enableFaultInjection"));
-    }
-
-    /**
-     * Set the SAML Metadata file Path.
-     *
-     * @param fileName Name of the metadata file.
-     */
-    private static void setSamlMetadataFile(String fileName) {
-        Path filePath = Paths.get("", "resources", "static", fileName);
-        samlMetadataFilePath = filePath.toString();
-    }
-
-    public static boolean isEnableHttpsToS3() {
-       return Boolean.valueOf(authServerConfig.getProperty("enableHttpsToS3"));
-    }
-
-    /**
-     * Set Request ID
-     */
-   public
-    static void setReqId(String reqId) { MDC.put("ReqId", reqId); }
-
-    /**
- * Set Request ID
- */
-   public
-    static void setStripedReqId(String reqId) { MDC.put("SReqId", reqId); }
-
-    /**
-     * Get Request ID
-     */
-   public
-    static String getReqId() {
-      String reqId = MDC.get("ReqId");
-      if (reqId == null) {
-        // Set to some dummy value for Unit tests where Req Id is not set
-        reqId = "0000";
-      }
-      return reqId;
-    }
-
-    /**
-     * Get Request ID
-     */
-   public
-    static String getStripedReqId() {
-      String sreqId = MDC.get("SReqId");
-      if (sreqId == null) {
-        // Set to some dummy value for Unit tests where Req Id is not set
-        sreqId = "0000";
-      }
-      return sreqId;
-    }
-
-   public
-    static List<String> getS3InternalAccounts() {
-      List<String> internalAccountsList = new ArrayList<>();
-      String internalAccounts =
-          authServerConfig.getProperty("s3InternalAccounts");
-      if (internalAccounts != null) {
-        internalAccountsList = Arrays.asList(internalAccounts.split(","));
-      }
-      return internalAccountsList;
-    }
-
-   public
-    int getVersion() {
-      return Integer.parseInt(authServerConfig.getProperty("version"));
-    }
-   public
-    static int getCacheTimeout() {
-      return Integer.parseInt(authServerConfig.getProperty("cacheTimeout"));
-    }
+  public
+   static int getMaxIAMUserLimit() {
+     return Integer.parseInt(authServerConfig.getProperty("maxIAMUserLimit"));
+   }
 }
-
