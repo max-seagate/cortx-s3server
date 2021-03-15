@@ -32,6 +32,22 @@
 #include "s3_factory.h"
 #include "s3_timer.h"
 
+struct S3ExtendedObjectInfo {
+ public:
+  S3ExtendedObjectInfo() {
+    start_offset_in_object = 0;
+    object_OID = {0, 0};
+    object_layout = -1;
+    total_blocks_in_object = 0;
+    object_size = 0;
+  }
+  size_t start_offset_in_object;
+  size_t total_blocks_in_object;
+  size_t object_size;
+  struct m0_uint128 object_OID;
+  int object_layout;
+};
+
 class S3GetObjectAction : public S3ObjectAction {
 
   std::shared_ptr<S3MotrReader> motr_reader;
@@ -48,6 +64,12 @@ class S3GetObjectAction : public S3ObjectAction {
   bool read_object_reply_started;
   std::shared_ptr<S3MotrReaderFactory> motr_reader_factory;
   S3Timer s3_timer;
+
+  // TODO: Data structures for extended object type
+  size_t total_objects;
+  size_t total_objects_to_read;
+  unsigned int next_fragment_object;
+  std::vector<struct S3ExtendedObjectInfo> extended_objects;
 
   size_t get_requested_content_length() const {
     return last_byte_offset_to_read - first_byte_offset_to_read + 1;
@@ -68,6 +90,8 @@ class S3GetObjectAction : public S3ObjectAction {
   void validate_object_info();
   void check_full_or_range_object_read();
   void set_total_blocks_to_read_from_object();
+  void set_total_blocks_to_read_from_fragmented_object();
+
   bool validate_range_header_and_set_read_options(
       const std::string& range_value);
   void read_fragmented_object();

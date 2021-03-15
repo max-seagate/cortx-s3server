@@ -42,7 +42,10 @@ S3GetObjectAction::S3GetObjectAction(
       first_byte_offset_to_read(0),
       last_byte_offset_to_read(0),
       total_blocks_to_read(0),
-      read_object_reply_started(false) {
+      read_object_reply_started(false),
+      total_objects(0),
+      total_objects_to_read(0),
+      next_fragment_object(0) {
   s3_log(S3_LOG_DEBUG, request_id, "%s Ctor\n", __func__);
 
   s3_log(S3_LOG_INFO, stripped_request_id,
@@ -145,17 +148,84 @@ void S3GetObjectAction::validate_object_info() {
     request->send_reply_start(S3HttpSuccess200);
     send_response_to_s3_client();
   } else {
-    size_t motr_unit_size =
-        S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
-            object_metadata->get_layout_id());
-    s3_log(S3_LOG_DEBUG, request_id,
-           "motr_unit_size = %zu for layout_id = %d\n", motr_unit_size,
-           object_metadata->get_layout_id());
-    /* Count Data blocks from data size */
-    total_blocks_in_object =
-        (content_length + (motr_unit_size - 1)) / motr_unit_size;
-    s3_log(S3_LOG_DEBUG, request_id, "total_blocks_in_object: (%zu)\n",
-           total_blocks_in_object);
+    // TODO: Perform below for extended object type as well
+    if (this->object_metadata->get_number_of_fragments() == 0) {
+      // Object is not fragmented
+      size_t motr_unit_size =
+          S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
+              object_metadata->get_layout_id());
+      s3_log(S3_LOG_DEBUG, request_id,
+             "motr_unit_size = %zu for layout_id = %d\n", motr_unit_size,
+             object_metadata->get_layout_id());
+      /* Count Data blocks from data size */
+      total_blocks_in_object =
+          (content_length + (motr_unit_size - 1)) / motr_unit_size;
+      s3_log(S3_LOG_DEBUG, request_id, "total_blocks_in_object: (%zu)\n",
+             total_blocks_in_object);
+    } else {
+      unsigned int ext_entry_index = 0;
+      // Object is fragmented, total objects is fragments + 1
+      total_objects = object_metadata->get_number_of_fragments() + 1;
+      s3_log(S3_LOG_DEBUG, request_id,
+             "Total objects (including primary): (%zu)\n", total_objects);
+      // extended_objects.resize(total_objects);
+      for (unsigned int i = 0; i < total_objects; i++) {
+        struct S3ExtendedObjectInfo obj_info;
+        if (i == 0) {
+          // Primary object
+          obj_info.start_offset_in_object = 0;
+          obj_info.object_OID = object_metadata->get_oid();
+          obj_info.object_layout = object_metadata->get_layout_id();
+          obj_info.object_size = object_metadata->get_primary_obj_size();
+          size_t motr_unit_size =
+              S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
+                  object_metadata->get_layout_id());
+          /* Count Data blocks from data size */
+          obj_info.total_blocks_in_object =
+              (obj_info.object_size + (motr_unit_size - 1)) / motr_unit_size;
+          total_blocks_in_object += obj_info.total_blocks_in_object;
+          s3_log(S3_LOG_DEBUG, request_id,
+                 "motr_unit_size = %zu for layout_id = %d in object (oid) ="
+                 "%" SCNx64 " : %" SCNx64 " with blocks in object = (%zu)\n",
+                 motr_unit_size, object_metadata->get_layout_id(),
+                 obj_info.object_OID.u_hi, obj_info.object_OID.u_lo,
+                 obj_info.total_blocks_in_object);
+          extended_objects.push_back(obj_info);
+        } else {
+          const std::shared_ptr<S3ObjectExtendedMetadata>& ext_obj =
+              object_metadata->get_extended_object_metadata();
+          const std::map<int, std::vector<struct s3_part_frag_context>>&
+              ext_entries = ext_obj->get_raw_extended_entries();
+
+          obj_info.start_offset_in_object =
+              extended_objects[i - 1].start_offset_in_object +
+              extended_objects[i - 1].object_size;
+          const struct s3_part_frag_context& frag_info =
+              (ext_entries.at(0)).at(ext_entry_index);
+          obj_info.object_OID = frag_info.motr_OID;
+          obj_info.object_layout = frag_info.layout_id;
+          obj_info.object_size = frag_info.item_size;
+          size_t motr_unit_size =
+              S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
+                  obj_info.object_layout);
+          /* Count Data blocks from data size */
+          obj_info.total_blocks_in_object =
+              (obj_info.object_size + (motr_unit_size - 1)) / motr_unit_size;
+          total_blocks_in_object += obj_info.total_blocks_in_object;
+          s3_log(S3_LOG_DEBUG, request_id,
+                 "motr_unit_size = %zu for layout_id = %d in object (oid) ="
+                 "%" SCNx64 " : %" SCNx64 " with blocks in object = (%zu)\n",
+                 motr_unit_size, obj_info.object_layout,
+                 obj_info.object_OID.u_hi, obj_info.object_OID.u_lo,
+                 obj_info.total_blocks_in_object);
+          extended_objects.push_back(obj_info);
+          ++ext_entry_index;
+        }
+      }  // End of For loop
+      s3_log(S3_LOG_DEBUG, request_id,
+             "total_blocks_in_all_fragmented_object: (%zu)\n",
+             total_blocks_in_object);
+    }
     next();
   }
   s3_log(S3_LOG_DEBUG, "", "%s Exit", __func__);
@@ -169,6 +239,7 @@ void S3GetObjectAction::set_total_blocks_to_read_from_object() {
     total_blocks_to_read = total_blocks_in_object;
   } else {
     // object read for valid range
+    // get total number blocks to read for a given valid range
     size_t motr_unit_size =
         S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
             object_metadata->get_layout_id());
@@ -178,6 +249,66 @@ void S3GetObjectAction::set_total_blocks_to_read_from_object() {
     // get block of last_byte_offset_to_read
     size_t last_byte_offset_block =
         (last_byte_offset_to_read + motr_unit_size) / motr_unit_size;
+    // get total number blocks to read for a given valid range
+    total_blocks_to_read = last_byte_offset_block - first_byte_offset_block + 1;
+  }
+}
+
+void S3GetObjectAction::set_total_blocks_to_read_from_fragmented_object() {
+  // to read complete object, total number blocks to read is equal to total
+  // number of blocks
+  if ((first_byte_offset_to_read == 0) &&
+      (last_byte_offset_to_read == (content_length - 1))) {
+    // How many blocks to read, starting from primary and then next object
+    total_blocks_to_read =
+        extended_objects[next_fragment_object].total_blocks_in_object;
+    total_objects_to_read = total_objects;
+  } else {
+    // TODO: Correct the implementtaion below for fragmented object,
+    // when byte range is specified.
+    // object read for valid range
+    // TODO: Find the object containing first_byte_offset_to_read
+    unsigned int first_byte_object_index = 0, last_byte_object_index = 0;
+    for (unsigned int i = 0; i < total_objects; i++) {
+      if (first_byte_offset_to_read <
+          (extended_objects[i].start_offset_in_object +
+           extended_objects[i].object_size)) {
+        // Found first_byte_offset_to_read in object at index i
+        first_byte_object_index = i;
+        break;
+      }
+    }
+    // TODO: Find the object containing last_byte_offset_to_read
+    for (unsigned int j = first_byte_object_index; j < total_objects; j++) {
+      if (last_byte_offset_to_read <
+          (extended_objects[j].start_offset_in_object +
+           extended_objects[j].object_size)) {
+        // Found last_byte_offset_to_read in object at index i
+        last_byte_object_index = j;
+        break;
+      }
+    }
+    // get block of first_byte_offset_to_read
+    size_t motr_unit_size_first_object = 0, motr_unit_size_last_object = 0;
+    motr_unit_size_first_object =
+        S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
+            extended_objects[first_byte_object_index].object_layout);
+    if (last_byte_object_index != first_byte_object_index) {
+      motr_unit_size_last_object =
+          S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
+              extended_objects[last_byte_object_index].object_layout);
+    } else {
+      motr_unit_size_last_object = motr_unit_size_first_object;
+    }
+    size_t first_byte_offset_block =
+        (first_byte_offset_to_read + motr_unit_size_first_object) /
+        motr_unit_size_first_object;
+
+    // get block of last_byte_offset_to_read
+    size_t last_byte_offset_block =
+        (last_byte_offset_to_read + motr_unit_size_last_object) /
+        motr_unit_size_last_object;
+
     // get total number blocks to read for a given valid range
     total_blocks_to_read = last_byte_offset_block - first_byte_offset_block + 1;
   }
@@ -324,6 +455,22 @@ void S3GetObjectAction::check_full_or_range_object_read() {
 void S3GetObjectAction::read_fragmented_object() {
   s3_log(S3_LOG_INFO, stripped_request_id, "%s Entry\n", __func__);
   // TODO
+  blocks_already_read = 0;
+  total_blocks_to_read = 0;
+
+  set_total_blocks_to_read_from_fragmented_object();
+  motr_reader = motr_reader_factory->create_motr_reader(
+      request, extended_objects[next_fragment_object].object_OID,
+      extended_objects[next_fragment_object].object_layout);
+  // get the block,in which first_byte_offset_to_read is present
+  // and initilaize the last index with starting offset of the block
+  size_t block_start_offset =
+      first_byte_offset_to_read -
+      (first_byte_offset_to_read %
+       S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
+           extended_objects[next_fragment_object].object_layout));
+  motr_reader->set_last_index(block_start_offset);
+  read_object_data();
   s3_log(S3_LOG_INFO, "", "%s Exit", __func__);
 }
 
@@ -345,7 +492,7 @@ void S3GetObjectAction::read_object() {
     motr_reader->set_last_index(block_start_offset);
     read_object_data();
   } else {
-    next();
+    read_fragmented_object();
   }
   s3_log(S3_LOG_DEBUG, "", "%s Exit", __func__);
 }
@@ -359,9 +506,14 @@ void S3GetObjectAction::read_object_data() {
 
   size_t max_blocks_in_one_read_op =
       S3Option::get_instance()->get_motr_units_per_request();
-  size_t motr_unit_size =
-      S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
-          object_metadata->get_layout_id());
+  size_t motr_unit_size = 0;
+  if (!object_metadata->is_object_extended()) {
+    motr_unit_size = S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
+        object_metadata->get_layout_id());
+  } else {
+    motr_unit_size = S3MotrLayoutMap::get_instance()->get_unit_size_for_layout(
+        extended_objects[next_fragment_object].object_layout);
+  }
   size_t blocks_to_read = 0;
 
   s3_log(S3_LOG_DEBUG, request_id, "max_blocks_in_one_read_op: (%zu)\n",
@@ -371,7 +523,7 @@ void S3GetObjectAction::read_object_data() {
   s3_log(S3_LOG_DEBUG, request_id, "total_blocks_to_read: (%zu)\n",
          total_blocks_to_read);
   if (blocks_already_read != total_blocks_to_read) {
-    if (blocks_already_read == 0 &&
+    if (blocks_already_read == 0 && next_fragment_object == 0 &&
         content_length > max_blocks_in_one_read_op * motr_unit_size) {
       size_t first_blocks_to_read =
           S3Option::get_instance()->get_motr_first_read_size();
@@ -408,7 +560,21 @@ void S3GetObjectAction::read_object_data() {
     }
   } else {
     // We are done Reading
-    send_response_to_s3_client();
+    // Check if this is an extended object. If not, send response to client.
+    // If extended object, open next fragmented object, and continue calling
+    // read_fragmented_object()
+    if (this->object_metadata->get_number_of_fragments() != 0) {
+      // Read next fragmented object
+      next_fragment_object++;
+      if (next_fragment_object < total_objects_to_read) {
+        read_fragmented_object();
+      } else {
+        send_response_to_s3_client();
+      }
+    } else {
+      // This is normal object
+      send_response_to_s3_client();
+    }
   }
   s3_log(S3_LOG_DEBUG, "", "%s Exit", __func__);
 }
@@ -461,7 +627,13 @@ void S3GetObjectAction::send_data_to_client() {
 
   char* data = NULL;
   size_t length = 0;
-  size_t requested_content_length = get_requested_content_length();
+  size_t requested_content_length = 0;
+  if (!object_metadata->is_object_extended()) {
+    requested_content_length = get_requested_content_length();
+  } else {
+    requested_content_length =
+        extended_objects[next_fragment_object].object_size;
+  }
   s3_log(S3_LOG_DEBUG, request_id,
          "object requested content length size(%zu).\n",
          requested_content_length);
@@ -482,12 +654,18 @@ void S3GetObjectAction::send_data_to_client() {
               object_metadata->get_layout_id());
       length -= read_data_start_offset;
     }
-    // to read number of bytes from final read block of read object
-    // that is requested content length is lesser than the sum of data has been
-    // sent to client and current read block size
-    if ((data_sent_to_client + length) >= requested_content_length) {
-      // length will have the size of remaining byte to sent
-      length = requested_content_length - data_sent_to_client;
+    // TODO: The below existing logic needs to be re-checked when
+    // we'll consider range read for extended object.
+    // Currently, disabled for extended objects
+    if (!object_metadata->is_object_extended()) {
+      // to read number of bytes from final read block of read object
+      // that is requested content length is lesser than the sum of data has
+      // been
+      // sent to client and current read block size
+      if ((data_sent_to_client + length) >= requested_content_length) {
+        // length will have the size of remaining byte to sent
+        length = requested_content_length - data_sent_to_client;
+      }
     }
     data_sent_to_client += length;
     request->set_bytes_sent(data_sent_to_client);
@@ -498,14 +676,30 @@ void S3GetObjectAction::send_data_to_client() {
   }
   s3_timer.stop();
 
-  if (data_sent_to_client != requested_content_length) {
-    read_object_data();
-  } else {
-    const auto mss = s3_timer.elapsed_time_in_millisec();
-    LOG_PERF("get_object_send_data_ms", request_id.c_str(), mss);
-    s3_stats_timing("get_object_send_data", mss);
+  if (!object_metadata->is_object_extended()) {
+    // For normal object
+    if (data_sent_to_client != requested_content_length) {
+      read_object_data();
+    } else {
+      const auto mss = s3_timer.elapsed_time_in_millisec();
+      LOG_PERF("get_object_send_data_ms", request_id.c_str(), mss);
+      s3_stats_timing("get_object_send_data", mss);
 
-    send_response_to_s3_client();
+      send_response_to_s3_client();
+    }
+  } else {
+    // For fragmented object
+    if (data_sent_to_client != requested_content_length) {
+      read_object_data();
+    } else {
+      // Read next fragmented object
+      next_fragment_object++;
+      if (next_fragment_object < total_objects_to_read) {
+        read_fragmented_object();
+      } else {
+        send_response_to_s3_client();
+      }
+    }
   }
   s3_log(S3_LOG_DEBUG, "", "%s Exit", __func__);
 }
