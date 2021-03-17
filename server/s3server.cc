@@ -28,10 +28,13 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#define S3_BUCKET_METADATA_CACHE_DEFINITION
+
 #include "motr_helpers.h"
 #include "evhtp_wrapper.h"
 #include "fid/fid.h"
 #include "murmur3_hash.h"
+#include "s3_bucket_metadata_cache.h"
 #include "s3_motr_layout.h"
 #include "s3_common_utilities.h"
 #include "s3_daemonize_server.h"
@@ -72,6 +75,7 @@
 S3Option *g_option_instance = NULL;
 evhtp_ssl_ctx_t *g_ssl_auth_ctx = NULL;
 evbase_t *global_evbase_handle;
+S3BucketMetadataCache *p_bucket_metadata_cache;
 extern struct m0_realm motr_uber_realm;
 // index will have bucket and account information
 struct m0_uint128 global_bucket_list_index_oid;
@@ -1134,6 +1138,10 @@ int main(int argc, char **argv) {
 
   /* Set the fatal handler to graceful shutdown*/
   set_graceful_handler();
+
+  std::unique_ptr<S3BucketMetadataCache> sptr_bucket_metadata_cache(
+      new S3BucketMetadataCache(10000, 5, 4));
+  p_bucket_metadata_cache = sptr_bucket_metadata_cache.get();
 
   // new flag in Libevent 2.1
   // EVLOOP_NO_EXIT_ON_EMPTY tells event_base_loop()
