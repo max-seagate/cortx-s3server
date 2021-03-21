@@ -345,7 +345,32 @@ size_t S3MotrReader::get_next_block(char **data) {
   data_read = motr_rw_op_context->data->ov_vec.v_count[iteration_index];
   iteration_index++;
 
-  md5crypt.Update(*data, data_read);
+  if (multipart_part_size == 0) {
+    // non-multipart-upload case. Just calculate md5 of the entire object.
+    md5crypt.Update(*data, data_read);
+  } else {
+    // the object was created with multipart upload.
+    // Calculate md5 checksums for each part independently.
+    size_t begin = total_size_read;
+    size_t end = total_size_read + data_read;
+    size_t part_first = begin / multipart_part_size;
+    size_t part_last = end / multipart_part_size;
+    if (part_first * multipart_part_size > begin)
+      md5crypt.Update(*data, part_first * multipart_part_size - begin);
+    for (size_t i = part_first + 1; i <= part_last; ++i) {
+      awsetag.add_part_etag(get_content_md5());
+      md5crypt.Reset();
+      if (i < part_last)
+        md5crypt.Update(&(*data)[i * multipart_part_size], multipart_part_size);
+    }
+    if (end > part_last * multipart_part_size) {
+      size_t start = part_last * multipart_part_size;
+      if (start < begin)
+        start = begin;
+      md5crypt.Update(&(*data)[start - begin], end - start);
+    }
+  }
+  total_size_read += data_read;
 
   s3_log(S3_LOG_DEBUG, "", "%s Exit", __func__);
   return data_read;
