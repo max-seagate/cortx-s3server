@@ -289,7 +289,7 @@ prepare_BUILD_file() {
       release_debug_valgrind_flags='"-O0", "-fno-inline", "-g", "-g3"'
   fi
 
-  cat BUILD.template > BUILD
+  #cat BUILD.template > BUILD
 
   # set motr library search path in 'BUILD' file
   sed -i 's|MOTR_DYNAMIC_INCLUDES|'"$motr_include_path"'|g' BUILD
@@ -307,10 +307,10 @@ if [ $just_gen_build_file -eq 1 ]; then
 fi
 
 
-if [ $no_check_code -eq 0 ]
-then
-  ./checkcodeformat.sh
-fi
+# if [ $no_check_code -eq 0 ]
+# then
+#   ./checkcodeformat.sh
+# fi
 
 # Build steps for third_party and motr
 if [ $no_motr_rpm -eq 0 ]
