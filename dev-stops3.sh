@@ -56,7 +56,7 @@ do
   ((instance++))
 done # while
 echo "Waiting for S3 to shutdown..."
-sleep 10
+sleep 1
 
 instance=0
 while [[ $instance -lt $MAX_S3_INSTANCES_NUM ]]
