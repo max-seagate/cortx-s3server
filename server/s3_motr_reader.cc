@@ -351,6 +351,7 @@ size_t S3MotrReader::get_next_block(char **data) {
   }
   if (multipart_part_size == 0) {
     // non-multipart-upload case. Just calculate md5 of the entire object.
+    s3_log(S3_LOG_INFO, "", "%s Update length=%zu\n", __func__, length);
     md5crypt.Update(*data, length);
   } else {
     // the object was created with multipart upload.
