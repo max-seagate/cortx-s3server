@@ -830,6 +830,8 @@ void RequestObject::send_reply_end() {
 
 void RequestObject::cancel()
 {
+  //if (ev_req == 0)
+  //  return;
   evhtp_obj->http_cancel_request(ev_req);
   client_has_disconnected();
   send_reply_end();
