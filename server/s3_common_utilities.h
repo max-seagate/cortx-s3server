@@ -26,6 +26,8 @@
 #include <cstdint>
 #include <string>
 
+class S3RequestObject;
+
 namespace S3CommonUtilities {
 
 class S3Obfuscator {
@@ -90,6 +92,9 @@ bool is_yaml_value_null(const std::string &value);
 
 std::string evhtp_error_flags_description(uint8_t errtype);
 
+bool validate_object_attrs_against_request(S3RequestObject& request_obj,
+					   const std::string& c_bucket_name,
+					   const std::string& c_object_name);
 }  // namespace S3CommonUtilities
 
 // Common graceful shutdown

@@ -32,6 +32,7 @@
 #include "s3_common_utilities.h"
 #include "s3_m0_uint128_helper.h"
 #include "s3_stats.h"
+#include "s3_common_utilities.h"
 
 extern struct m0_uint128 global_instance_id;
 
@@ -308,6 +309,7 @@ void S3ObjectMetadata::load(std::function<void(void)> on_success,
 }
 
 void S3ObjectMetadata::load_successful() {
+  namespace s3cu = S3CommonUtilities;
   s3_log(S3_LOG_DEBUG, request_id, "Object metadata load successful\n");
   if (this->from_json(motr_kv_reader->get_value()) != 0) {
     s3_log(S3_LOG_ERROR, request_id,
@@ -319,6 +321,10 @@ void S3ObjectMetadata::load_successful() {
            S3_IEM_METADATA_CORRUPTED_JSON);
 
     json_parsing_error = true;
+    load_failed();
+  } else if (!s3cu::validate_object_attrs_against_request(*request,
+                                                          bucket_name,
+                                                          object_name)) {
     load_failed();
   } else {
     s3_timer.stop();
@@ -756,4 +762,3 @@ bool S3ObjectMetadata::check_object_tags_exists() {
 }
 
 int S3ObjectMetadata::object_tags_count() { return object_tags.size(); }
-

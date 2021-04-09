@@ -25,8 +25,11 @@
 #include <evhtp.h>
 
 #include "s3_common_utilities.h"
+#include "s3_request_object.h"
 #include "s3_log.h"
+#include "s3_iem.h"
 #include "s3_option.h"
+#include "s3_fi_common.h"
 
 namespace S3CommonUtilities {
 
@@ -179,6 +182,36 @@ std::string evhtp_error_flags_description(uint8_t errtype) {
     errtype_str.resize(errtype_str.size() - 1);
   }
   return errtype_str;
+}
+
+static inline bool isprints(const std::string& attr)
+{
+  return std::all_of(attr.begin(), attr.end(), [](std::string::value_type c) {
+    return static_cast<bool>(std::isprint(c));
+  });
+}
+
+bool validate_object_attrs_against_request(S3RequestObject& request_obj,
+					   const std::string& c_bucket_name,
+					   const std::string& c_object_name)
+{
+  // NOTE: don't call get_object_name() and get_bucket_name() twice;
+  // UTs have expectations about amount and order of these calls.
+  const std::string& req_object_name = request_obj.get_object_name();
+  const std::string& req_bucket_name = request_obj.get_bucket_name();
+
+  if (s3_fi_is_enabled("di_metadata_bucket_or_object_corrupted") ||
+      req_bucket_name != c_bucket_name || req_object_name != c_object_name) {
+    s3_iem(LOG_ERR, S3_IEM_OBJECT_METADATA_NOT_VALID,
+           S3_IEM_OBJECT_METADATA_NOT_VALID_STR,
+           S3_IEM_OBJECT_METADATA_NOT_VALID_JSON,
+           !isprints(req_bucket_name) ? "@@@corrupted@@@" : req_bucket_name.c_str(),
+           !isprints(c_bucket_name)   ? "@@@corrupted@@@" : c_bucket_name.c_str(),
+           !isprints(req_object_name) ? "@@@corrupted@@@" : req_object_name.c_str(),
+           !isprints(c_object_name)   ? "@@@corrupted@@@" : c_object_name.c_str());
+    return false;
+  }
+  return true;
 }
 
 }  // namespace S3CommonUtilities

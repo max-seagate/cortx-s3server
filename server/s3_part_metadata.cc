@@ -26,6 +26,7 @@
 #include "s3_iem.h"
 #include "s3_log.h"
 #include "s3_part_metadata.h"
+#include "s3_common_utilities.h"
 
 void S3PartMetadata::initialize(std::string uploadid, int part_num) {
   json_parsing_error = false;
@@ -192,6 +193,7 @@ void S3PartMetadata::load(std::function<void(void)> on_success,
 }
 
 void S3PartMetadata::load_successful() {
+  namespace s3cu = S3CommonUtilities;
   s3_log(S3_LOG_DEBUG, request_id, "Found part metadata\n");
   if (this->from_json(motr_kv_reader->get_value()) != 0) {
     s3_log(S3_LOG_ERROR, request_id,
@@ -203,6 +205,10 @@ void S3PartMetadata::load_successful() {
            S3_IEM_METADATA_CORRUPTED_JSON);
 
     json_parsing_error = true;
+    load_failed();
+  } else if (!s3cu::validate_object_attrs_against_request(*request,
+                                                          bucket_name,
+                                                          object_name)) {
     load_failed();
   } else {
     state = S3PartMetadataState::present;
