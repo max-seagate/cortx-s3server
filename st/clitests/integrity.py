@@ -45,7 +45,46 @@ def test_get(bucket: str, key: str, output: str, get_must_fail: bool):
 
 
 def test_multipart_upload(bucket: str, key: str, output: str,
-                          parts: List[str], get_must_fail: bool) -> None:
+                          parts: List[str], get_must_fail: bool,
+                          part_size: int, last_part_size: int,
+                          first_byte: str, corrupted: bool,
+                          dry_run: bool) -> None:
+    if dry_run:
+        sizes = [part_size if i == 0 else
+                 part_size if i < len(parts) - 1 else last_part_size
+                 for i in range(len(parts))]
+        first_bytes = [first_byte if  i == corrupted else 'k'
+                       for i in range(len(parts))]
+        print(f'''Testing multipart upload.
+Bucket name: {bucket}
+Object key: {key}
+First byte: {first_byte}
+Kind of corruption: { {v: k for k, v in CORRUPTIONS.items()}[first_byte] }
+GET filename (output): {output}
+GET must be successful: {"false" if get_must_fail else "true"}''')
+        for i, part in enumerate(parts):
+            print(f'Part {i}: filename={part} '
+                  f'first_byte={first_bytes[i]} '
+                  f'size={sizes[i]}')
+        print('Commands:')
+        for i, part in enumerate(parts):
+            print(f'  ./integrity.py --create-random-file {part} \
+--random-file-size {sizes[i]} --random-file-first-byte {first_bytes[i]}')
+        print(f'''  aws s3api create-multipart-upload \
+--bucket {bucket} --key {key}
+  <take UploadId from the previous command output>''')
+        for i, part in enumerate(parts):
+            print(f'  aws s3api upload-part --bucket {bucket} --key {key} \
+--part-number {i+1} --upload-id <UploadId> --body {part}')
+        print(f'''  <create ./parts.json with the list of parts as descibed in \
+https://docs.aws.amazon.com/cli/latest/reference/s3api/\
+complete-multipart-upload.html>
+  aws s3api complete-multipart-upload --multipart-upload \
+file://./parts.json --bucket {bucket} --key {key} --upload-id <UploadId>
+  aws s3api get-object --bucket {bucket} --key {key} {output} && \
+cat {' '.join(parts)} | diff --report-identical-files - {output}''')
+        print()
+        return
     create_multipart = json.loads(s3api["create-multipart-upload",
                                         "--bucket", bucket, "--key", key]())
     upload_id = create_multipart["UploadId"]
@@ -135,12 +174,12 @@ def auto_test_multipart(args) -> None:
                 corrupted = 0 if first_byte in ['Z', 'F'] else \
                     random.randrange(len(parts) + (last_part_size > 0))
                 for i, part in enumerate(parts):
-                    if args.create_objects:
+                    if args.create_objects and not args.dry_run:
                         create_random_file(part, part_size, first_byte
                                            if i == corrupted else 'k')
                 if last_part_size > 0:
                     parts += [f'{args.body}.last_part']
-                    if args.create_objects:
+                    if args.create_objects and not args.dry_run:
                         create_random_file(parts[-1], last_part_size,
                                            first_byte
                                            if corrupted == len(parts) - 1
@@ -152,8 +191,11 @@ def auto_test_multipart(args) -> None:
                                       f'uuid={uuid.uuid4()}',
                                       args.output, parts,
                                       not args.corruption.
-                                      startswith('none-on-'))
-    print('auto-test-multipart: Successful.')
+                                      startswith('none-on-'),
+                                      part_size, last_part_size,
+                                      first_byte, corrupted, args.dry_run)
+    if not args.dry_run:
+        print('auto-test-multipart: Successful.')
 
 
 def main() -> None:
