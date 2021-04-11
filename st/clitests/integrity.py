@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import json
 import uuid
 import random
@@ -77,7 +78,27 @@ def test_multipart_upload(bucket: str, key: str, output: str,
 
 
 def test_put_get(bucket: str, key: str, body: str, output: str,
-                 get_must_fail: bool) -> None:
+                 get_must_fail: bool,
+                 size: int, first_byte: str, dry_run: bool) -> None:
+    if dry_run:
+        print(f'''Testing PUT, followed by GET.
+Bucket name: {bucket}
+Object key: {key}
+Object size: {size}
+First byte: {first_byte}
+Kind of corruption: { {v: k for k, v in CORRUPTIONS.items()}[first_byte] }
+PUT filename (input): {body}
+GET filename (output): {output}
+GET must be successful: {"false" if get_must_fail else "true"}
+Commands:
+  ./integrity.py --create-random-file {body} --random-file-size 100 --random-file-first-byte k
+  aws s3api put-object --bucket {bucket} --key {key} --body {body}
+  rm -vf {output}
+  aws s3api get-object --bucket {bucket} --key {key} {output} && \
+diff --report-identical-files {body} {output}
+  aws s3api delete-object --bucket {bucket} --key {key}
+''')
+        return
     s3api["put-object",  "--bucket", bucket, "--key", key, '--body', body]()
     test_get(bucket, key, output, get_must_fail)
     if not get_must_fail:
@@ -90,13 +111,15 @@ def auto_test_put_get(args, object_size: List[int]) -> None:
     for i in range(args.iterations):
         print(f'iteration {i}...')
         for size in object_size:
-            if args.create_objects:
+            if args.create_objects and not args.dry_run:
                 create_random_file(args.body, size, first_byte)
             test_put_get(args.bucket, f'size={size}_i={i}',
                          args.body, args.output,
                          size > 0 and
-                         not args.corruption. startswith('none-on-'))
-    print('auto-test-put-get: Successful.')
+                         not args.corruption.startswith('none-on-'),
+                         size, first_byte, args.dry_run)
+    if not args.dry_run:
+        print('auto-test-put-get: Successful.')
 
 
 def auto_test_multipart(args) -> None:
@@ -148,8 +171,21 @@ def main() -> None:
     parser.add_argument('--create-objects', action='store_true')
     parser.add_argument('--corruption', choices=CORRUPTIONS.keys(),
                         default='none-on-write')
+    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--create-random-file', type=str)
+    parser.add_argument('--random-file-size', type=int)
+    parser.add_argument('--random-file-first-byte', type=str)
     args = parser.parse_args()
     print(args)
+    if args.create_random_file:
+        create_random_file(args.create_random_file, args.random_file_size,
+                           args.random_file_first_byte)
+        return
+    if args.dry_run:
+        print('To prepare for the test please run the following '
+              '(it might return error which is OK):')
+        print('  aws s3 mb s3://test || true')
+        print()
     local["aws"]["s3 mb s3://test".split()].run(retcode=None)
     if args.test_put_get:
         auto_test_put_get(args, [args.object_size])
