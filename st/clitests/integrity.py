@@ -130,7 +130,7 @@ PUT filename (input): {body}
 GET filename (output): {output}
 GET must be successful: {"false" if get_must_fail else "true"}
 Commands:
-  ./integrity.py --create-random-file {body} --random-file-size 100 --random-file-first-byte k
+  ./integrity.py --create-random-file {body} --random-file-size {size} --random-file-first-byte k
   aws s3api put-object --bucket {bucket} --key {key} --body {body}
   rm -vf {output}
   aws s3api get-object --bucket {bucket} --key {key} {output} && \
